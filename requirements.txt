@@ -6,3 +6,5 @@ google-auth>=2.0.0
 pydub
 python-dotenv
 PyNaCl
+pystray
+pillow
