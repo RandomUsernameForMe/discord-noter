@@ -90,7 +90,7 @@ async def project_remove(
 
 # ── Recording ─────────────────────────────────────────────────────────────────
 
-@bot.slash_command(name="join", description="Bot se připojí do tvého voice kanálu a začne nahrávat.")
+@bot.slash_command(name="note-start", description="Bot se připojí do tvého voice kanálu a začne nahrávat.")
 async def join(ctx: discord.ApplicationContext):
     if not _is_allowed(ctx):
         await ctx.respond("Nemáš oprávnění používat tento příkaz.", ephemeral=True)
@@ -115,10 +115,10 @@ async def join(ctx: discord.ApplicationContext):
     voice_client.start_recording(sink, _recording_finished_callback, ctx.channel)
 
     active_sessions[ctx.guild_id] = (voice_client, sink, ctx.channel)
-    await ctx.respond(f"Připojeno do **{channel.name}** — nahrávám. Zastav pomocí `/stop`.")
+    await ctx.respond(f"Připojeno do **{channel.name}** — nahrávám. Zastav pomocí `/note-stop`.")
 
 
-@bot.slash_command(name="stop", description="Zastaví nahrávání a vygeneruje zápis.")
+@bot.slash_command(name="note-stop", description="Zastaví nahrávání a vygeneruje zápis.")
 async def stop(ctx: discord.ApplicationContext):
     if not _is_allowed(ctx):
         await ctx.respond("Nemáš oprávnění používat tento příkaz.", ephemeral=True)

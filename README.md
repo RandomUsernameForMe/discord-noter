@@ -74,8 +74,8 @@ Nebo přes tray ikonu (Windows): spusť `tray.py` — bot běží na pozadí s i
 
 | Příkaz | Popis |
 |--------|-------|
-| `/join` | Bot se připojí do tvého aktuálního voice kanálu a začne nahrávat |
-| `/stop` | Zastaví nahrávání a spustí zpracování |
+| `/note-start` | Bot se připojí do tvého aktuálního voice kanálu a začne nahrávat |
+| `/note-stop` | Zastaví nahrávání a spustí zpracování |
 
 ### Správa projektů (Drive složky)
 
