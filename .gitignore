@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environment
+.env
+
+# Secrets
+service_account.json
+
+# Notes output
+notes/
+
+# Audio files
+*.wav
+*.mp3
