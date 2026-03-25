@@ -23,10 +23,4 @@ def upload_file(local_path: str, drive_folder_id: str, service_account_json: str
     uploaded = service.files().create(body=metadata, media_body=media, fields="id").execute()
     file_id = uploaded["id"]
 
-    # Make it readable by anyone with the link
-    service.permissions().create(
-        fileId=file_id,
-        body={"type": "anyone", "role": "reader"},
-    ).execute()
-
     return f"https://drive.google.com/file/d/{file_id}/view"

@@ -27,7 +27,17 @@ whisper_model = whisper.load_model(settings.whisper_model)
 log.info("Whisper připraven.")
 
 # guild_id -> (voice_client, sink, text_channel)
-active_sessions: dict[int, tuple[discord.VoiceClient, MeetingSink, discord.TextChannel]] = {}
+active_sessions: dict[int, tuple[discord.VoiceClient, MeetingSink, discord.TextChannel] | None] = {}
+
+# guild_id -> Discord user ID toho, kdo zavolal /stop (pro msg_check v callbacku)
+pending_stop: dict[int, int] = {}
+
+
+def _is_allowed(ctx: discord.ApplicationContext) -> bool:
+    """Vrátí True pokud má uživatel oprávnění. Prázdný whitelist = bez omezení."""
+    if not settings.allowed_user_ids:
+        return True
+    return ctx.author.id in settings.allowed_user_ids
 
 
 # ── Project management ────────────────────────────────────────────────────────
@@ -41,6 +51,9 @@ async def project_add(
     name: discord.Option(str, "Název projektu"),
     drive_url: discord.Option(str, "URL Google Drive složky (nebo jen ID)"),
 ):
+    if not _is_allowed(ctx):
+        await ctx.respond("Nemáš oprávnění používat tento příkaz.", ephemeral=True)
+        return
     try:
         folder_id = add_project(name, drive_url)
         await ctx.respond(f"Projekt **{name}** přidán (folder ID: `{folder_id}`).", ephemeral=True)
@@ -50,6 +63,9 @@ async def project_add(
 
 @project_group.command(name="list", description="Vypíše uložené projekty")
 async def project_list(ctx: discord.ApplicationContext):
+    if not _is_allowed(ctx):
+        await ctx.respond("Nemáš oprávnění používat tento příkaz.", ephemeral=True)
+        return
     projects = list_projects()
     if not projects:
         await ctx.respond("Žádné projekty. Přidej je pomocí `/project add`.", ephemeral=True)
@@ -63,6 +79,9 @@ async def project_remove(
     ctx: discord.ApplicationContext,
     name: discord.Option(str, "Název projektu"),
 ):
+    if not _is_allowed(ctx):
+        await ctx.respond("Nemáš oprávnění používat tento příkaz.", ephemeral=True)
+        return
     if remove_project(name):
         await ctx.respond(f"Projekt **{name}** odstraněn.", ephemeral=True)
     else:
@@ -73,6 +92,9 @@ async def project_remove(
 
 @bot.slash_command(name="join", description="Bot se připojí do tvého voice kanálu a začne nahrávat.")
 async def join(ctx: discord.ApplicationContext):
+    if not _is_allowed(ctx):
+        await ctx.respond("Nemáš oprávnění používat tento příkaz.", ephemeral=True)
+        return
     if not ctx.author.voice:
         await ctx.respond("Nejsi ve voice kanálu.", ephemeral=True)
         return
@@ -80,8 +102,14 @@ async def join(ctx: discord.ApplicationContext):
         await ctx.respond("Nahrávání už probíhá.", ephemeral=True)
         return
 
-    channel = ctx.author.voice.channel
-    voice_client = await channel.connect()
+    # Rezervuj slot před await, aby souběžné /join neprošlo kontrolou výše
+    active_sessions[ctx.guild_id] = None
+    try:
+        channel = ctx.author.voice.channel
+        voice_client = await channel.connect()
+    except Exception:
+        active_sessions.pop(ctx.guild_id, None)
+        raise
 
     sink = MeetingSink()
     voice_client.start_recording(sink, _recording_finished_callback, ctx.channel)
@@ -92,10 +120,14 @@ async def join(ctx: discord.ApplicationContext):
 
 @bot.slash_command(name="stop", description="Zastaví nahrávání a vygeneruje zápis.")
 async def stop(ctx: discord.ApplicationContext):
-    if ctx.guild_id not in active_sessions:
+    if not _is_allowed(ctx):
+        await ctx.respond("Nemáš oprávnění používat tento příkaz.", ephemeral=True)
+        return
+    if ctx.guild_id not in active_sessions or active_sessions[ctx.guild_id] is None:
         await ctx.respond("Žádné aktivní nahrávání.", ephemeral=True)
         return
 
+    pending_stop[ctx.guild_id] = ctx.author.id
     await ctx.respond("Zastavuji nahrávání, čekej...")
     voice_client, sink, _ = active_sessions[ctx.guild_id]
     voice_client.stop_recording()
@@ -123,81 +155,103 @@ class ProjectSelectView(discord.ui.View):
 
 async def _recording_finished_callback(sink: MeetingSink, channel: discord.TextChannel, *args):
     guild = channel.guild
+    invoker_id = pending_stop.pop(guild.id, None)
     session = active_sessions.pop(guild.id, None)
     if session:
         await session[0].disconnect()
 
-    await channel.send("Přepisuji audio (může to chvíli trvat)...")
-
-    loop = asyncio.get_event_loop()
-    segments = await loop.run_in_executor(None, transcribe_recording, sink, guild, whisper_model)
-    transcript = format_transcript(segments)
-
-    if not segments:
-        await channel.send("Nepodařilo se přepsat žádné audio. Zápis nebyl vytvořen.")
-        return
-
-    # Ask for notes style folder
-    await channel.send("Zadej cestu ke složce s existujícími zápisy (pro styl) nebo napiš `přeskoč`:")
-
-    def msg_check(m: discord.Message):
-        return m.channel.id == channel.id and not m.author.bot
-
-    notes_folder = None
     try:
-        reply = await bot.wait_for("message", check=msg_check, timeout=60)
-        text = reply.content.strip()
-        if text.lower() not in ("přeskoč", "preskoc", "skip", "-"):
-            notes_folder = text
-    except asyncio.TimeoutError:
-        await channel.send("Čas vypršel, pokračuji bez vzorových zápisů.")
+        await channel.send("Přepisuji audio (může to chvíli trvat)...")
 
-    await channel.send("Generuji zápis pomocí Claude...")
+        loop = asyncio.get_running_loop()
+        segments = await loop.run_in_executor(None, transcribe_recording, sink, guild, whisper_model)
+        transcript = format_transcript(segments)
 
-    meeting_date = datetime.now().strftime("%Y-%m-%d %H:%M")
-    notes_md = await loop.run_in_executor(
-        None, generate_notes, transcript, meeting_date, notes_folder, settings.anthropic_api_key
-    )
+        if not segments:
+            await channel.send("Nepodařilo se přepsat žádné audio. Zápis nebyl vytvořen.")
+            return
 
-    # Save locally
-    output_dir = Path(settings.notes_output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    filename = datetime.now().strftime("%Y-%m-%d_%H-%M") + ".md"
-    local_path = output_dir / filename
-    local_path.write_text(notes_md, encoding="utf-8")
+        # Ask for notes style folder — jen od toho, kdo zavolal /stop
+        await channel.send("Zadej cestu ke složce s existujícími zápisy (pro styl) nebo napiš `přeskoč`:")
 
-    # Ask which project (Drive folder)
-    projects = list_projects()
-    drive_url = None
+        def msg_check(m: discord.Message):
+            return (
+                m.channel.id == channel.id
+                and not m.author.bot
+                and (invoker_id is None or m.author.id == invoker_id)
+            )
 
-    if projects:
-        view = ProjectSelectView(projects)
-        msg = await channel.send("Kam uložit na Google Drive?", view=view)
-        await view.wait()
-        await msg.delete()
+        notes_folder = None
+        try:
+            reply = await bot.wait_for("message", check=msg_check, timeout=60)
+            text = reply.content.strip()
+            if text.lower() not in ("přeskoč", "preskoc", "skip", "-"):
+                candidate = Path(text)
+                if candidate.is_dir():
+                    notes_folder = str(candidate)
+                else:
+                    await channel.send("Zadaná cesta není platný adresář. Pokračuji bez vzorových zápisů.")
+        except asyncio.TimeoutError:
+            await channel.send("Čas vypršel, pokračuji bez vzorových zápisů.")
 
-        folder_id = view.chosen
-        if folder_id and folder_id != "__skip__":
-            try:
-                drive_url = await loop.run_in_executor(
-                    None, upload_file, str(local_path), folder_id, settings.google_service_account_json
-                )
-            except Exception as e:
-                log.error(f"Drive upload selhal: {e}")
-                await channel.send(f"Upload na Drive selhal: {e}")
+        await channel.send("Generuji zápis pomocí Claude...")
 
-    # Preview
-    preview_lines = notes_md.splitlines()[:25]
-    preview = "\n".join(preview_lines)
-    if len(notes_md.splitlines()) > 25:
-        preview += "\n..."
+        meeting_date = datetime.now().strftime("%Y-%m-%d %H:%M")
+        notes_md = await loop.run_in_executor(
+            None, generate_notes, transcript, meeting_date, notes_folder, settings.anthropic_api_key
+        )
 
-    msg_text = f"**Zápis uložen:** `{local_path}`"
-    if drive_url:
-        msg_text += f"\n**Google Drive:** {drive_url}"
-    msg_text += f"\n\n```markdown\n{preview[:1800]}\n```"
+        # Save locally
+        output_dir = Path(settings.notes_output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        filename = datetime.now().strftime("%Y-%m-%d_%H-%M") + ".md"
+        local_path = output_dir / filename
+        local_path.write_text(notes_md, encoding="utf-8")
 
-    await channel.send(msg_text)
+        # Ask which project (Drive folder)
+        projects = list_projects()
+        drive_url = None
+
+        if projects:
+            view = ProjectSelectView(projects)
+            msg = await channel.send("Kam uložit na Google Drive?", view=view)
+            await view.wait()
+            await msg.delete()
+
+            folder_id = view.chosen
+            if folder_id and folder_id != "__skip__":
+                try:
+                    drive_url = await loop.run_in_executor(
+                        None, upload_file, str(local_path), folder_id, settings.google_service_account_json
+                    )
+                except Exception as e:
+                    log.error(f"Drive upload selhal: {e}")
+                    await channel.send("Upload na Drive selhal. Zápis je uložen lokálně.")
+
+        # Preview — hlídej celkovou délku zprávy (Discord limit 2000 znaků)
+        header = f"**Zápis uložen:** `{local_path}`"
+        if drive_url:
+            header += f"\n**Google Drive:** {drive_url}"
+
+        preview_lines = notes_md.splitlines()[:25]
+        preview = "\n".join(preview_lines)
+        if len(notes_md.splitlines()) > 25:
+            preview += "\n..."
+
+        code_block = f"\n\n```markdown\n{preview}\n```"
+        # Zkrať preview pokud by celková zpráva překročila 2000 znaků
+        max_preview = 1990 - len(header) - len("\n\n```markdown\n\n```")
+        if max_preview > 0 and len(preview) > max_preview:
+            code_block = f"\n\n```markdown\n{preview[:max_preview]}...\n```"
+
+        await channel.send(header + code_block)
+
+    except Exception as e:
+        log.error(f"Chyba v _recording_finished_callback: {e}", exc_info=True)
+        try:
+            await channel.send(f"Při zpracování záznamu nastala chyba: {type(e).__name__}")
+        except Exception:
+            pass
 
 
 bot.run(settings.discord_token)
