@@ -47,12 +47,17 @@ GOOGLE_SERVICE_ACCOUNT_JSON=./service_account.json   # pro Drive upload
 
 V Discordu: Nastavení → Pokročilé → zapnout **Vývojářský režim** → pravý klik na sebe → **Kopírovat ID uživatele**.
 
-### Discord bot — potřebná oprávnění
+### Pozvání bota na server
 
-Na [discord.com/developers](https://discord.com/developers/applications) při vytváření bota:
-- Bot Permissions: `Send Messages`, `Connect`, `Speak`, `Use Voice Activity`
-- Scopes při generování invite linku: `bot`, `applications.commands`
-- Intents: **Message Content Intent** zapnout (potřebné pro čtení zpráv po `/stop`)
+1. Jdi na [discord.com/developers](https://discord.com/developers/applications) → vyber svou aplikaci
+2. Vlevo **OAuth2 → URL Generator**
+3. Zaškrtni Scopes: `bot` + `applications.commands`
+4. Zaškrtni Bot Permissions: `Send Messages`, `Connect`, `Speak`, `Use Voice Activity`
+5. Zkopíruj vygenerovanou URL → otevři v prohlížeči → vyber server → Autorizovat
+
+### Potřebné intenty
+
+V záložce **Bot** na developer portálu zapnout: **Message Content Intent**
 
 ---
 
