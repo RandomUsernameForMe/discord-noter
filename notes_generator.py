@@ -1,6 +1,9 @@
+import logging
 from pathlib import Path
 
 import anthropic
+
+log = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "claude-sonnet-4-6"
 TRUNCATED_NOTE = "\n\n> ⚠️ Zápis byl zkrácen — dosažen limit délky odpovědi."
@@ -69,6 +72,10 @@ Buď věcný a přesný. Nedomýšlej věci, které nebyly řečeny."""
         model=model or DEFAULT_MODEL,
         max_tokens=8192,
         messages=[{"role": "user", "content": prompt}],
+    )
+    log.info(
+        f"Claude {message.model}: vstup {message.usage.input_tokens} tokenů, "
+        f"výstup {message.usage.output_tokens} tokenů"
     )
 
     text = message.content[0].text

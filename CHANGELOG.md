@@ -1,3 +1,11 @@
+## [2026-09-24] - Voice s DAVE E2EE, oprava přepisu na CPU, logování tokenů
+
+- py-cord z PR #3159 (DAVE receive), připnuto na commit — vydaný py-cord s DAVE nenahrává
+- `TimedWaveSink` (`recorder.py`) doplňuje ticho podle reálného času — nový py-cord to nedělá
+- `/note-start`: `ctx.defer()` (fix „Aplikace neodpovídá"), kontrola oprávnění View/Connect předem (jinak tichý hang)
+- Whisper defaultně na CPU (`WHISPER_DEVICE`), `auto` padal na chybějícím cuBLAS
+- Log spotřeby Claude tokenů (vstup/výstup) po každém zápisu
+
 ## [2026-09-24] - faster-whisper turbo, zjednodušený flow po nahrávání
 
 - Whisper → `faster-whisper` (`large-v3-turbo`, int8, VAD); odpadá torch/openai-whisper a pydub
