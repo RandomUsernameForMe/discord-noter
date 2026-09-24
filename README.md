@@ -7,7 +7,7 @@ Bot nahrává hlasové hovory na Discordu, přepíše je pomocí Whisper a vygen
 ## Požadavky
 
 - Python 3.11+
-- GPU doporučeno pro Whisper (CPU funguje, ale je pomalé)
+- Whisper běží lokálně přes `faster-whisper` (CPU stačí, GPU s CUDA se použije automaticky)
 - Discord bot token
 - Anthropic API klíč
 - Google Cloud service account (volitelné — jen pro Drive upload)
@@ -38,7 +38,8 @@ ANTHROPIC_API_KEY=tvůj_anthropic_klíč
 ALLOWED_USER_IDS=123456789012345678
 
 # Volitelné
-WHISPER_MODEL=large-v3          # výchozí: large-v3
+WHISPER_MODEL=large-v3-turbo    # výchozí: large-v3-turbo
+CLAUDE_MODEL=claude-sonnet-4-6  # model pro generování zápisu
 NOTES_OUTPUT_DIR=./notes        # kam se ukládají zápisy lokálně
 GOOGLE_SERVICE_ACCOUNT_JSON=./service_account.json   # pro Drive upload
 ```
@@ -57,7 +58,7 @@ V Discordu: Nastavení → Pokročilé → zapnout **Vývojářský režim** →
 
 ### Potřebné intenty
 
-V záložce **Bot** na developer portálu zapnout: **Message Content Intent**
+Žádné privilegované intenty nejsou potřeba.
 
 ---
 
@@ -67,9 +68,9 @@ V záložce **Bot** na developer portálu zapnout: **Message Content Intent**
 python bot.py
 ```
 
-Nebo přes tray ikonu (Windows): spusť `tray.py` — bot běží na pozadí s ikonou v systémové liště.
+Nebo přes tray ikonu (Windows): spusť `start_bot.vbs` nebo `tray.py` — bot se spustí automaticky a běží na pozadí s ikonou v systémové liště. Výstup jde do `bot.log` (v menu **Otevřít log**).
 
-> **Poznámka:** Při prvním spuštění se načítá Whisper model (může trvat 1–2 minuty a vyžaduje ~5 GB RAM/VRAM pro `large-v3`). Bot se připojí k Discordu až po načtení.
+> **Poznámka:** Při prvním spuštění se stahuje Whisper model (~1,6 GB pro `large-v3-turbo`). Bot se připojí k Discordu až po načtení modelu.
 
 ---
 
@@ -82,11 +83,13 @@ Nebo přes tray ikonu (Windows): spusť `tray.py` — bot běží na pozadí s i
 | `/note-start` | Bot se připojí do tvého aktuálního voice kanálu a začne nahrávat |
 | `/note-stop` | Zastaví nahrávání a spustí zpracování |
 
+Nahrávání se zastaví i samo, když z voice kanálu odejdou všichni lidé.
+
 ### Správa projektů (Drive složky)
 
 | Příkaz | Popis |
 |--------|-------|
-| `/project add <název> <url>` | Přidá projekt — propojí název s Google Drive složkou |
+| `/project add <název> <url> [style_folder]` | Přidá projekt — propojí název s Google Drive složkou, volitelně se složkou vzorových zápisů |
 | `/project list` | Vypíše uložené projekty |
 | `/project remove <název>` | Odstraní projekt |
 
@@ -99,22 +102,19 @@ Nebo přes tray ikonu (Windows): spusť `tray.py` — bot běží na pozadí s i
 ## Typický průběh
 
 1. Přijdi do voice kanálu s ostatními
-2. Napiš `/join` v textovém kanálu — bot se připojí a začne nahrávat
-3. Po skončení porady napiš `/stop`
-4. Bot se zeptá na **složku se vzory zápisů** (pro styl) — napiš cestu nebo `přeskoč`
-5. Probíhá přepis (Whisper) — může trvat minutu i déle podle délky záznamu
-6. Probíhá generování zápisu (Claude)
-7. Pokud máš nastavené projekty, vyber kam uložit na Drive (nebo přeskoč)
-8. Bot pošle do kanálu preview zápisu a cestu k lokálně uloženému souboru
+2. Napiš `/note-start` v textovém kanálu — bot se připojí a začne nahrávat
+3. Po skončení porady napiš `/note-stop` (nebo prostě všichni odejděte)
+4. Pokud máš projekty, vyber ze seznamu, ke kterému zápis patří (nebo „Neuložit na Drive“) — přepis mezitím běží na pozadí. Vybírat může jen ten, kdo nahrávání zastavil; po 2 minutách se pokračuje bez projektu.
+5. Probíhá přepis (Whisper) a generování zápisu (Claude)
+6. Bot pošle do kanálu zápis a přepis jako přílohy `.md` (a odkaz na Drive, pokud byl vybrán projekt)
 
 ### Vzorové zápisy (styl)
 
-Když bot poprosí o cestu ke složce, můžeš zadat adresář s existujícími `.md` zápisy. Bot přečte posledních 5 souborů a použije je jako ukázku stylu pro Claude — výsledný zápis pak bude strukturou odpovídat tvým předchozím zápisům.
+Projekt může mít nastavenou `style_folder` — lokální adresář (na stroji, kde běží bot) s existujícími `.md` zápisy. Bot přečte posledních 5 souborů a použije je jako ukázku stylu pro Claude.
 
-Zadej cestu jako:
-- `C:\Users\TGJ\notes` (Windows absolutní cesta)
-- `./notes` (relativní k adresáři bota)
-- `přeskoč` / `skip` / `-` — přeskočí, zápis bude ve výchozím formátu
+```
+/project add name:Tým drive_url:https://drive.google.com/drive/folders/ABC... style_folder:D:/zapisy/tym
+```
 
 ---
 
@@ -124,12 +124,12 @@ Zápisy se ukládají do `NOTES_OUTPUT_DIR` (výchozí: `./notes/`) ve formátu:
 
 ```
 notes/
-  2026-03-25_14-30.md
-  2026-03-25_16-00.md
+  2026-03-25_14-30_Tym.md          # zápis
+  2026-03-25_14-30_Tym_prepis.md   # přepis s časy a mluvčími
   ...
 ```
 
-Projekty (Drive folder ID) jsou uloženy v `projects.json` v adresáři bota.
+Projekty (Drive folder ID a složka se vzory) jsou uloženy v `projects.json` v adresáři bota.
 
 ---
 
@@ -154,6 +154,7 @@ Nahraný soubor není automaticky veřejný — sdílení spravuješ ručně v D
 | `base` | ~150 MB | rychlý | dobrá |
 | `small` | ~500 MB | střední | dobrá |
 | `medium` | ~1.5 GB | pomalý | velmi dobrá |
-| `large-v3` | ~3 GB | nejpomalejší | nejlepší (výchozí) |
+| `large-v3-turbo` | ~1.6 GB | střední | velmi dobrá (výchozí) |
+| `large-v3` | ~3 GB | nejpomalejší | nejlepší |
 
 Nastav v `.env`: `WHISPER_MODEL=medium`

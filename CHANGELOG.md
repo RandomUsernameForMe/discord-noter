@@ -1,3 +1,18 @@
+## [2026-09-24] - faster-whisper turbo, zjednodušený flow po nahrávání
+
+- Whisper → `faster-whisper` (`large-v3-turbo`, int8, VAD); odpadá torch/openai-whisper a pydub
+- Oprava: WAV konstanty `WaveSink.AUDIO_*` v py-cord 2.7 neexistují → přepis padal; nyní `discord.opus.Decoder`
+- Časování stop přes `sync_start=True`; smazán `recorder.py` (vlastní offsety)
+- Složka se vzory je volitelná vlastnost projektu (`/project add ... style_folder`); zrušen dotaz v chatu → není potřeba Message Content Intent
+- Projekt se vybírá hned po zastavení (paralelně s přepisem), jen autor `/note-stop`, timeout 2 min s hláškou
+- Zápis + přepis ukládány lokálně a posílány jako přílohy; název souboru obsahuje projekt
+- Auto-stop nahrávání, když voice kanál opustí všichni lidé
+- Autocomplete v `/project remove`, globální kontrola oprávnění (`@bot.check`)
+- `CLAUDE_MODEL` v env, `max_tokens` 8192 + upozornění na zkrácený zápis
+- Srozumitelná chyba při chybějící povinné env proměnné
+- Tray: bot startuje automaticky, položka „Otevřít log", kill fallback, log handle už neleakuje
+- `bot.log` v `.gitignore`, `ALLOWED_USER_IDS` a `CLAUDE_MODEL` v `.env.example`
+
 ## [2026-03-25] - Security & reliability fixes
 
 - Přidána autorizace přes `ALLOWED_USER_IDS` env var (všechny slash příkazy)
