@@ -15,8 +15,9 @@ class Segment:
     username: str
 
 
-def load_model(name: str) -> WhisperModel:
-    return WhisperModel(name, device="auto", compute_type="int8")
+def load_model(name: str, device: str = "cpu") -> WhisperModel:
+    # "auto" by vybral CUDA i bez nainstalovaných CUDA knihoven (cuBLAS/cuDNN) → pád až při přepisu
+    return WhisperModel(name, device=device, compute_type="int8")
 
 
 def _write_wav(pcm: bytes, path: str) -> None:
@@ -44,21 +45,17 @@ def _transcribe_user(model: WhisperModel, pcm: bytes, username: str) -> list[Seg
         os.unlink(tmp_path)
 
 
-def transcribe_recording(
-    sink: discord.sinks.Sink,
-    guild: discord.Guild,
-    model: WhisperModel,
-) -> list[Segment]:
+def transcribe_recording(sink: discord.sinks.Sink, model: WhisperModel) -> list[Segment]:
     """Transcribe each user's audio and return merged chronological segments."""
     all_segments: list[Segment] = []
 
-    for user_id, audio_data in sink.audio_data.items():
-        member = guild.get_member(user_id)
-        username = member.display_name if member else str(user_id)
+    # Klíče audio_data jsou User/Member (None = neznámý zdroj)
+    for user, audio_data in sink.audio_data.items():
+        username = getattr(user, "display_name", None) or "Neznámý"
 
         audio_data.file.seek(0)
         raw = audio_data.file.read()
-        # WaveSink.format_audio přepíše začátek bufferu prázdnou WAV hlavičkou
+        # WaveSink.format_audio uloží audio jako WAV — odřízni hlavičku, _write_wav přidá vlastní
         if raw.startswith(b"RIFF"):
             raw = raw[44:]
         if len(raw) < 1024:

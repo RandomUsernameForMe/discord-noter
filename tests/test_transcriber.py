@@ -84,40 +84,43 @@ def _model(per_call: list[list[tuple[float, float, str]]]):
     return model
 
 
-def _guild(names: dict[int, str]):
-    guild = MagicMock()
-    guild.get_member.side_effect = lambda uid: SimpleNamespace(display_name=names[uid]) if uid in names else None
-    return guild
+class _Member:
+    def __init__(self, display_name: str):
+        self.display_name = display_name
+
+
+ALICE = _Member("Alice")
+BOB = _Member("Bob")
 
 
 class TestTranscribeRecording:
     def test_merges_users_chronologically(self):
-        sink = SimpleNamespace(audio_data={1: _audio(b"\x01" * 2048), 2: _audio(b"\x01" * 2048)})
+        sink = SimpleNamespace(audio_data={ALICE: _audio(b"\x01" * 2048), BOB: _audio(b"\x01" * 2048)})
         model = _model([[(5.0, 6.0, " druhá ")], [(1.0, 2.0, "první")]])
-        result = transcribe_recording(sink, _guild({1: "Alice", 2: "Bob"}), model)
+        result = transcribe_recording(sink, model)
         assert [(s.username, s.text, s.start) for s in result] == [("Bob", "první", 1.0), ("Alice", "druhá", 5.0)]
 
     def test_skips_short_audio(self):
-        sink = SimpleNamespace(audio_data={1: _audio(b"\x01" * 100)})
+        sink = SimpleNamespace(audio_data={ALICE: _audio(b"\x01" * 100)})
         model = _model([])
-        assert transcribe_recording(sink, _guild({1: "Alice"}), model) == []
+        assert transcribe_recording(sink, model) == []
         model.transcribe.assert_not_called()
 
     def test_header_only_audio_is_skipped(self):
         # 44B hlavička + 1000B dat → po odříznutí hlavičky < 1024 → přeskočeno
-        sink = SimpleNamespace(audio_data={1: _audio(b"\x01" * 1000, header=True)})
+        sink = SimpleNamespace(audio_data={ALICE: _audio(b"\x01" * 1000, header=True)})
         model = _model([])
-        assert transcribe_recording(sink, _guild({1: "Alice"}), model) == []
+        assert transcribe_recording(sink, model) == []
 
-    def test_drops_empty_text_and_unknown_member_uses_id(self):
-        sink = SimpleNamespace(audio_data={42: _audio(b"\x01" * 2048)})
+    def test_drops_empty_text_and_unknown_source(self):
+        sink = SimpleNamespace(audio_data={None: _audio(b"\x01" * 2048)})
         model = _model([[(0.0, 1.0, "  "), (1.0, 2.0, "ahoj")]])
-        result = transcribe_recording(sink, _guild({}), model)
-        assert [(s.username, s.text) for s in result] == [("42", "ahoj")]
+        result = transcribe_recording(sink, model)
+        assert [(s.username, s.text) for s in result] == [("Neznámý", "ahoj")]
 
     def test_uses_czech_and_vad(self):
-        sink = SimpleNamespace(audio_data={1: _audio(b"\x01" * 2048)})
+        sink = SimpleNamespace(audio_data={ALICE: _audio(b"\x01" * 2048)})
         model = _model([[]])
-        transcribe_recording(sink, _guild({1: "Alice"}), model)
+        transcribe_recording(sink, model)
         kwargs = model.transcribe.call_args.kwargs
         assert kwargs["language"] == "cs" and kwargs["vad_filter"] is True

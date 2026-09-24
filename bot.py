@@ -5,8 +5,10 @@ from datetime import datetime
 from pathlib import Path
 
 import discord
+from discord.voice import VoiceClient
 
 from config import load_settings
+from recorder import TimedWaveSink
 from transcriber import load_model, transcribe_recording, format_transcript
 from notes_generator import generate_notes
 from drive_uploader import upload_file
@@ -28,11 +30,11 @@ async def on_ready():
 
 
 log.info(f"Načítám Whisper model '{settings.whisper_model}'...")
-whisper_model = load_model(settings.whisper_model)
+whisper_model = load_model(settings.whisper_model, settings.whisper_device)
 log.info("Whisper připraven.")
 
 # guild_id -> voice_client; None = slot rezervován / probíhá zastavování
-active_sessions: dict[int, discord.VoiceClient | None] = {}
+active_sessions: dict[int, VoiceClient | None] = {}
 
 # guild_id -> ID toho, kdo zavolal /note-stop (None = automatické zastavení)
 pending_stop: dict[int, int | None] = {}
@@ -115,18 +117,28 @@ async def join(ctx: discord.ApplicationContext):
     if ctx.guild_id in active_sessions:
         await ctx.respond("Nahrávání už probíhá.", ephemeral=True)
         return
+    # Bez oprávnění py-cord nevyhodí chybu, ale zasekne se na voice handshaku
+    perms = ctx.author.voice.channel.permissions_for(ctx.guild.me)
+    if not (perms.view_channel and perms.connect):
+        await ctx.respond(
+            f"Nemám oprávnění **Zobrazit kanál** a **Připojit** v **{ctx.author.voice.channel.name}**. "
+            "Přidej je roli bota v nastavení kanálu nebo kategorie.",
+            ephemeral=True,
+        )
+        return
 
     # Rezervuj slot před await, aby souběžné /note-start neprošlo kontrolou výše
     active_sessions[ctx.guild_id] = None
     try:
+        # Připojení k voice trvá déle než 3 s limit Discordu na odpověď
+        await ctx.defer()
         channel = ctx.author.voice.channel
         voice_client = await channel.connect()
     except Exception:
         active_sessions.pop(ctx.guild_id, None)
         raise
 
-    # sync_start: stopy všech uživatelů začínají ve stejný čas → sedí časové značky
-    voice_client.start_recording(discord.sinks.WaveSink(), _recording_finished_callback, ctx.channel, sync_start=True)
+    voice_client.start_recording(TimedWaveSink(), _recording_finished_callback, ctx.channel)
 
     active_sessions[ctx.guild_id] = voice_client
     await ctx.respond(f"Připojeno do **{channel.name}** — nahrávám. Zastav pomocí `/note-stop`.")
@@ -212,7 +224,7 @@ def _output_base(project_name: str | None) -> Path:
     return output_dir / name
 
 
-async def _recording_finished_callback(sink: discord.sinks.WaveSink, channel: discord.TextChannel, *args):
+async def _recording_finished_callback(sink: TimedWaveSink, channel: discord.TextChannel, *args):
     guild = channel.guild
     invoker_id = pending_stop.pop(guild.id, None)
     active_sessions.pop(guild.id, None)
@@ -224,7 +236,7 @@ async def _recording_finished_callback(sink: discord.sinks.WaveSink, channel: di
         await channel.send("Přepisuji audio (může to chvíli trvat)...")
 
         loop = asyncio.get_running_loop()
-        transcription = loop.run_in_executor(None, transcribe_recording, sink, guild, whisper_model)
+        transcription = loop.run_in_executor(None, transcribe_recording, sink, whisper_model)
         project_name = await _ask_project(channel, invoker_id)
         segments = await transcription
 

@@ -11,6 +11,7 @@ class Settings:
     anthropic_api_key: str
     google_service_account_json: str
     whisper_model: str
+    whisper_device: str
     claude_model: str | None
     notes_output_dir: str
     allowed_user_ids: list[int]  # empty = no restriction
@@ -31,6 +32,7 @@ def load_settings() -> Settings:
         anthropic_api_key=_require("ANTHROPIC_API_KEY"),
         google_service_account_json=os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON", "./service_account.json"),
         whisper_model=os.environ.get("WHISPER_MODEL", "large-v3-turbo"),
+        whisper_device=os.environ.get("WHISPER_DEVICE", "cpu"),
         claude_model=os.environ.get("CLAUDE_MODEL") or None,
         notes_output_dir=os.environ.get("NOTES_OUTPUT_DIR", "./notes"),
         allowed_user_ids=allowed_user_ids,

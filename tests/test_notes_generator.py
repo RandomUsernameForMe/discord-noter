@@ -140,6 +140,16 @@ class TestGenerateNotes:
             result = generate_notes("text", "2024-03-25", None, "key")
         assert result.startswith("# Zápis") and "zkrácen" in result
 
+    def test_logs_token_usage(self, mock_anthropic_client, caplog):
+        resp = mock_anthropic_client.messages.create.return_value
+        resp.model = "claude-sonnet-4-6"
+        resp.usage.input_tokens = 12345
+        resp.usage.output_tokens = 678
+        with caplog.at_level("INFO", logger="notes_generator"):
+            with patch("notes_generator.anthropic.Anthropic", return_value=mock_anthropic_client):
+                generate_notes("text", "2024-03-25", None, "key")
+        assert "vstup 12345 tokenů, výstup 678 tokenů" in caplog.text
+
     def test_complete_response_has_no_warning(self, mock_anthropic_client):
         mock_anthropic_client.messages.create.return_value.stop_reason = "end_turn"
         with patch("notes_generator.anthropic.Anthropic", return_value=mock_anthropic_client):
