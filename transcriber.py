@@ -3,10 +3,8 @@ import tempfile
 import wave
 from dataclasses import dataclass
 
-import whisper
 import discord
-
-from recorder import MeetingSink
+from faster_whisper import WhisperModel
 
 
 @dataclass
@@ -17,62 +15,56 @@ class Segment:
     username: str
 
 
-def _wav_duration(path: str) -> float:
-    with wave.open(path, "rb") as wf:
-        return wf.getnframes() / wf.getframerate()
+def load_model(name: str) -> WhisperModel:
+    return WhisperModel(name, device="auto", compute_type="int8")
+
+
+def _write_wav(pcm: bytes, path: str) -> None:
+    dec = discord.opus.Decoder
+    with wave.open(path, "wb") as wf:
+        wf.setnchannels(dec.CHANNELS)
+        wf.setsampwidth(dec.SAMPLE_SIZE // dec.CHANNELS)
+        wf.setframerate(dec.SAMPLING_RATE)
+        wf.writeframes(pcm)
+
+
+def _transcribe_user(model: WhisperModel, pcm: bytes, username: str) -> list[Segment]:
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+        tmp_path = tmp.name
+    try:
+        _write_wav(pcm, tmp_path)
+        # vad_filter přeskočí ticho (stopy jsou díky sync_start dorovnané tichem), časy zachová
+        segments, _ = model.transcribe(tmp_path, language="cs", vad_filter=True)
+        return [
+            Segment(start=s.start, end=s.end, text=s.text.strip(), username=username)
+            for s in segments
+            if s.text.strip()
+        ]
+    finally:
+        os.unlink(tmp_path)
 
 
 def transcribe_recording(
-    sink: MeetingSink,
+    sink: discord.sinks.Sink,
     guild: discord.Guild,
-    model: whisper.Whisper,
+    model: WhisperModel,
 ) -> list[Segment]:
     """Transcribe each user's audio and return merged chronological segments."""
-
     all_segments: list[Segment] = []
 
     for user_id, audio_data in sink.audio_data.items():
         member = guild.get_member(user_id)
         username = member.display_name if member else str(user_id)
 
-        # Skip empty audio
         audio_data.file.seek(0)
         raw = audio_data.file.read()
+        # WaveSink.format_audio přepíše začátek bufferu prázdnou WAV hlavičkou
+        if raw.startswith(b"RIFF"):
+            raw = raw[44:]
         if len(raw) < 1024:
             continue
 
-        # Write to temp WAV
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
-            tmp_path = tmp.name
-
-        try:
-            with wave.open(tmp_path, "wb") as wf:
-                wf.setnchannels(discord.sinks.WaveSink.AUDIO_CHANNEL)
-                wf.setsampwidth(
-                    discord.sinks.WaveSink.AUDIO_SAMPLE_SIZE // discord.sinks.WaveSink.AUDIO_CHANNEL
-                )
-                wf.setframerate(discord.sinks.WaveSink.AUDIO_SAMPLE_RATE)
-                audio_data.file.seek(0)
-                wf.writeframes(audio_data.file.read())
-
-            user_offset = sink.get_user_start_offset(user_id)
-
-            result = model.transcribe(tmp_path, language="cs", verbose=False)
-
-            for seg in result["segments"]:
-                text = seg["text"].strip()
-                if not text:
-                    continue
-                all_segments.append(
-                    Segment(
-                        start=user_offset + seg["start"],
-                        end=user_offset + seg["end"],
-                        text=text,
-                        username=username,
-                    )
-                )
-        finally:
-            os.unlink(tmp_path)
+        all_segments.extend(_transcribe_user(model, raw, username))
 
     all_segments.sort(key=lambda s: s.start)
     return all_segments

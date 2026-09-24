@@ -128,3 +128,20 @@ class TestGenerateNotes:
             generate_notes("text", "2024-03-25", None, "key")
         call_args = mock_anthropic_client.messages.create.call_args
         assert call_args[1]["model"] == "claude-sonnet-4-6"
+
+    def test_custom_model(self, mock_anthropic_client):
+        with patch("notes_generator.anthropic.Anthropic", return_value=mock_anthropic_client):
+            generate_notes("text", "2024-03-25", None, "key", model="claude-sonnet-5")
+        assert mock_anthropic_client.messages.create.call_args[1]["model"] == "claude-sonnet-5"
+
+    def test_truncated_response_gets_warning(self, mock_anthropic_client):
+        mock_anthropic_client.messages.create.return_value.stop_reason = "max_tokens"
+        with patch("notes_generator.anthropic.Anthropic", return_value=mock_anthropic_client):
+            result = generate_notes("text", "2024-03-25", None, "key")
+        assert result.startswith("# Zápis") and "zkrácen" in result
+
+    def test_complete_response_has_no_warning(self, mock_anthropic_client):
+        mock_anthropic_client.messages.create.return_value.stop_reason = "end_turn"
+        with patch("notes_generator.anthropic.Anthropic", return_value=mock_anthropic_client):
+            result = generate_notes("text", "2024-03-25", None, "key")
+        assert "zkrácen" not in result

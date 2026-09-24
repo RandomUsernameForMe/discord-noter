@@ -1,7 +1,9 @@
-import os
 from pathlib import Path
 
 import anthropic
+
+DEFAULT_MODEL = "claude-sonnet-4-6"
+TRUNCATED_NOTE = "\n\n> ⚠️ Zápis byl zkrácen — dosažen limit délky odpovědi."
 
 
 def _read_existing_notes(folder: str, max_files: int = 5) -> str:
@@ -27,6 +29,7 @@ def generate_notes(
     meeting_date: str,
     existing_notes_folder: str | None,
     api_key: str,
+    model: str | None = None,
 ) -> str:
     """Generate meeting notes from transcript using Claude."""
 
@@ -63,9 +66,12 @@ Vytvoř zápis z porady ve formátu Markdown. Zápis musí obsahovat:
 Buď věcný a přesný. Nedomýšlej věci, které nebyly řečeny."""
 
     message = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=4096,
+        model=model or DEFAULT_MODEL,
+        max_tokens=8192,
         messages=[{"role": "user", "content": prompt}],
     )
 
-    return message.content[0].text
+    text = message.content[0].text
+    if message.stop_reason == "max_tokens":
+        text += TRUNCATED_NOTE
+    return text

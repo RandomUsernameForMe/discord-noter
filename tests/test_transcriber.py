@@ -1,10 +1,8 @@
-import pytest
-from unittest.mock import MagicMock, patch, mock_open
 import io
-import wave
-import struct
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 
-from transcriber import Segment, format_transcript, _wav_duration
+from transcriber import Segment, format_transcript, transcribe_recording
 
 
 # ---------------------------------------------------------------------------
@@ -70,32 +68,56 @@ class TestFormatTranscript:
 
 
 # ---------------------------------------------------------------------------
-# _wav_duration — testujeme s reálným in-memory WAV souborem
+# transcribe_recording — mockovaný model a sink
 # ---------------------------------------------------------------------------
 
-def _make_wav_bytes(num_frames: int, framerate: int = 16000) -> bytes:
-    """Vytvoří minimální platný WAV soubor v paměti."""
-    buf = io.BytesIO()
-    with wave.open(buf, "wb") as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)
-        wf.setframerate(framerate)
-        # Tichá data: num_frames * 2 bytes (16-bit mono)
-        wf.writeframes(b"\x00\x00" * num_frames)
-    return buf.getvalue()
+def _audio(pcm: bytes, header: bool = False):
+    data = (b"RIFF" + b"\x00" * 40 if header else b"") + pcm
+    return SimpleNamespace(file=io.BytesIO(data))
 
 
-class TestWavDuration:
-    def test_duration_two_seconds(self, tmp_path):
-        wav_path = tmp_path / "test.wav"
-        wav_path.write_bytes(_make_wav_bytes(num_frames=32000, framerate=16000))
-        assert _wav_duration(str(wav_path)) == pytest.approx(2.0)
+def _model(per_call: list[list[tuple[float, float, str]]]):
+    model = MagicMock()
+    model.transcribe.side_effect = [
+        ([SimpleNamespace(start=a, end=b, text=t) for a, b, t in segs], None) for segs in per_call
+    ]
+    return model
 
-    def test_duration_zero_frames(self, tmp_path):
-        wav_path = tmp_path / "empty.wav"
-        wav_path.write_bytes(_make_wav_bytes(num_frames=0, framerate=16000))
-        assert _wav_duration(str(wav_path)) == pytest.approx(0.0)
 
-    def test_duration_nonexistent_file(self, tmp_path):
-        with pytest.raises(Exception):
-            _wav_duration(str(tmp_path / "missing.wav"))
+def _guild(names: dict[int, str]):
+    guild = MagicMock()
+    guild.get_member.side_effect = lambda uid: SimpleNamespace(display_name=names[uid]) if uid in names else None
+    return guild
+
+
+class TestTranscribeRecording:
+    def test_merges_users_chronologically(self):
+        sink = SimpleNamespace(audio_data={1: _audio(b"\x01" * 2048), 2: _audio(b"\x01" * 2048)})
+        model = _model([[(5.0, 6.0, " druhá ")], [(1.0, 2.0, "první")]])
+        result = transcribe_recording(sink, _guild({1: "Alice", 2: "Bob"}), model)
+        assert [(s.username, s.text, s.start) for s in result] == [("Bob", "první", 1.0), ("Alice", "druhá", 5.0)]
+
+    def test_skips_short_audio(self):
+        sink = SimpleNamespace(audio_data={1: _audio(b"\x01" * 100)})
+        model = _model([])
+        assert transcribe_recording(sink, _guild({1: "Alice"}), model) == []
+        model.transcribe.assert_not_called()
+
+    def test_header_only_audio_is_skipped(self):
+        # 44B hlavička + 1000B dat → po odříznutí hlavičky < 1024 → přeskočeno
+        sink = SimpleNamespace(audio_data={1: _audio(b"\x01" * 1000, header=True)})
+        model = _model([])
+        assert transcribe_recording(sink, _guild({1: "Alice"}), model) == []
+
+    def test_drops_empty_text_and_unknown_member_uses_id(self):
+        sink = SimpleNamespace(audio_data={42: _audio(b"\x01" * 2048)})
+        model = _model([[(0.0, 1.0, "  "), (1.0, 2.0, "ahoj")]])
+        result = transcribe_recording(sink, _guild({}), model)
+        assert [(s.username, s.text) for s in result] == [("42", "ahoj")]
+
+    def test_uses_czech_and_vad(self):
+        sink = SimpleNamespace(audio_data={1: _audio(b"\x01" * 2048)})
+        model = _model([[]])
+        transcribe_recording(sink, _guild({1: "Alice"}), model)
+        kwargs = model.transcribe.call_args.kwargs
+        assert kwargs["language"] == "cs" and kwargs["vad_filter"] is True

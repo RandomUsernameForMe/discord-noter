@@ -16,3 +16,6 @@ notes/
 # Audio files
 *.wav
 *.mp3
+
+# Logs
+bot.log

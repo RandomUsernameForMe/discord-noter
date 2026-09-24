@@ -1,5 +1,6 @@
 """System tray launcher pro discord-noter."""
 
+import os
 import subprocess
 import sys
 import threading
@@ -34,11 +35,21 @@ def _is_running() -> bool:
     return _process is not None and _process.poll() is None
 
 
+LOG_FILE = Path(__file__).parent / "bot.log"
+
+
 def _start(_icon, _item=None):
     global _process
     if _is_running():
         return
-    _process = subprocess.Popen([PYTHON, str(BOT_SCRIPT)], cwd=BOT_SCRIPT.parent)
+    # Proces dědí handle, rodič si svou kopii může hned zavřít
+    with open(LOG_FILE, "a", encoding="utf-8") as log_out:
+        _process = subprocess.Popen(
+            [PYTHON, str(BOT_SCRIPT)],
+            cwd=BOT_SCRIPT.parent,
+            stdout=log_out,
+            stderr=log_out,
+        )
     _refresh()
 
 
@@ -46,9 +57,17 @@ def _stop(_icon, _item=None):
     global _process
     if _process and _is_running():
         _process.terminate()
-        _process.wait(timeout=10)
+        try:
+            _process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            _process.kill()
     _process = None
     _refresh()
+
+
+def _open_log(_icon, _item=None):
+    LOG_FILE.touch()
+    os.startfile(LOG_FILE)
 
 
 def _restart(_icon, _item=None):
@@ -74,6 +93,7 @@ def _menu() -> pystray.Menu:
         pystray.MenuItem("Spustit", _start, enabled=lambda _: not _is_running()),
         pystray.MenuItem("Zastavit", _stop, enabled=lambda _: _is_running()),
         pystray.MenuItem("Restartovat", _restart, enabled=lambda _: _is_running()),
+        pystray.MenuItem("Otevřít log", _open_log),
         pystray.Menu.SEPARATOR,
         pystray.MenuItem("Ukončit", _exit),
     )
@@ -108,6 +128,7 @@ def main():
         title="discord-noter — zastaven",
         menu=_menu(),
     )
+    _start(_icon)
     threading.Thread(target=_watchdog, daemon=True).start()
     _icon.run()
 
